@@ -2,3 +2,4 @@ streamlit
 openai
 sentence-transformers
 numpy
+supabase
