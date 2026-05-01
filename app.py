@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 from openai import OpenAI
 
@@ -176,4 +175,3 @@ Question:
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
-```
