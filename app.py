@@ -2,40 +2,81 @@ import streamlit as st
 from openai import OpenAI
 import numpy as np
 from sentence_transformers import SentenceTransformer
-import sqlite3
-import json
+from supabase import create_client
 
 # ================= CONFIG =================
-st.set_page_config(page_title="VLSI AI DB", page_icon="⚡")
+st.set_page_config(page_title="VLSI AI", page_icon="⚡")
 
-SYSTEM_PROMPT = """You are a Senior VLSI Verification Engineer.
-Understand conversations and answer with practical insights.
-"""
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+SYSTEM_PROMPT = "You are a senior VLSI verification engineer."
+
+# ================= AUTH =================
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+def login(email, password):
+    res = supabase.auth.sign_in_with_password({
+        "email": email,
+        "password": password
+    })
+    return res
+
+def signup(email, password):
+    res = supabase.auth.sign_up({
+        "email": email,
+        "password": password
+    })
+    return res
+
+# ================= LOGIN UI =================
+if not st.session_state.user:
+    st.title("🔐 Login / Signup")
+
+    tab1, tab2 = st.tabs(["Login", "Signup"])
+
+    with tab1:
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            try:
+                res = login(email, password)
+                st.session_state.user = res.user
+                st.rerun()
+            except Exception as e:
+                st.error("Login failed")
+
+    with tab2:
+        email = st.text_input("New Email")
+        password = st.text_input("New Password", type="password")
+
+        if st.button("Signup"):
+            try:
+                signup(email, password)
+                st.success("Signup successful. Now login.")
+            except:
+                st.error("Signup failed")
+
+    st.stop()
+
+# ================= USER INFO =================
+user_id = st.session_state.user.id
 
 # ================= DATABASE =================
-conn = sqlite3.connect("chat.db", check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS chats (
-    user TEXT,
-    messages TEXT
-)
-""")
-conn.commit()
-
-def load_chat(user):
-    cursor.execute("SELECT messages FROM chats WHERE user=?", (user,))
-    row = cursor.fetchone()
-    if row:
-        return json.loads(row[0])
+def load_chat():
+    res = supabase.table("chats").select("*").eq("user", user_id).execute()
+    if res.data:
+        return res.data[0]["messages"]
     return []
 
-def save_chat(user, messages):
-    data = json.dumps(messages)
-    cursor.execute("DELETE FROM chats WHERE user=?", (user,))
-    cursor.execute("INSERT INTO chats VALUES (?, ?)", (user, data))
-    conn.commit()
+def save_chat(messages):
+    data = {"user": user_id, "messages": messages}
+    supabase.table("chats").upsert(data).execute()
 
 # ================= LOAD KNOWLEDGE =================
 @st.cache_resource
@@ -75,27 +116,13 @@ def retrieve(query, k=3, threshold=0.35):
 
     return "\n\n".join([chunks[i] for i in top_indices])
 
-# ================= FOLLOW-UP =================
-def is_follow_up(query):
-    keywords = ["this", "that", "it", "how", "why", "where"]
-    return any(word in query.lower() for word in keywords)
-
-# ================= USER LOGIN =================
-user = st.sidebar.text_input("Enter your name")
-
-if not user:
-    st.warning("Enter your name to continue")
-    st.stop()
-
-# ================= LOAD SESSION =================
+# ================= SESSION =================
 if "messages" not in st.session_state:
-    st.session_state.messages = load_chat(user)
+    st.session_state.messages = load_chat()
 
 # ================= SIDEBAR =================
 with st.sidebar:
-    api_key = st.secrets.get("GROQ_API_KEY", None)
-    if not api_key:
-        api_key = st.text_input("Enter Groq API Key", type="password")
+    st.write(f"👤 {st.session_state.user.email}")
 
     model_choice = st.selectbox(
         "Model",
@@ -106,79 +133,57 @@ with st.sidebar:
         ]
     )
 
+    if st.button("Logout"):
+        st.session_state.user = None
+        st.rerun()
+
     if st.button("🗑 Clear Chat"):
         st.session_state.messages = []
-        save_chat(user, [])
+        save_chat([])
 
 # ================= MAIN =================
-st.title(f"⚡ VLSI AI - {user}")
+st.title("⚡ VLSI AI (Authenticated)")
 
-if not api_key:
-    st.stop()
-
-# ================= DISPLAY =================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ================= INPUT =================
-user_input = st.chat_input("Ask your VLSI question...")
+user_input = st.chat_input("Ask your question...")
 
 if user_input:
-    st.session_state.messages.append({
-        "role": "user",
-        "content": user_input
-    })
-
-    save_chat(user, st.session_state.messages)
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    save_chat(st.session_state.messages)
 
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # RAG logic
-    if is_follow_up(user_input):
-        context = ""
-    else:
-        context = retrieve(user_input)
+    context = retrieve(user_input)
 
-    if context:
-        final_prompt = f"Context:\n{context}\n\nQuestion:\n{user_input}"
-    else:
-        final_prompt = user_input
+    final_prompt = f"{context}\n\nQuestion:\n{user_input}" if context else user_input
 
     client = OpenAI(
-        api_key=api_key,
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1"
     )
 
-    clean_messages = st.session_state.messages[-8:]
-
-    messages_for_model = [
+    messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        *clean_messages,
+        *st.session_state.messages[-8:],
         {"role": "user", "content": final_prompt}
     ]
 
-    try:
-        with st.spinner("Thinking..."):
+    with st.spinner("Thinking..."):
+        response = client.chat.completions.create(
+            model=model_choice,
+            messages=messages,
+            max_tokens=1024
+        )
 
-            response = client.chat.completions.create(
-                model=model_choice,
-                messages=messages_for_model,
-                max_tokens=1024
-            )
+        reply = response.choices[0].message.content
 
-            reply = response.choices[0].message.content
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+        save_chat(st.session_state.messages)
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": reply
-            })
-
-            save_chat(user, st.session_state.messages)
-
-            with st.chat_message("assistant"):
-                st.markdown(reply)
-
-    except Exception as e:
-        st.error(str(e))
+        with st.chat_message("assistant"):
+            st.markdown(reply)
