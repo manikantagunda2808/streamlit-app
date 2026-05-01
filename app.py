@@ -5,7 +5,7 @@ from sentence_transformers import SentenceTransformer
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
-    page_title="VLSI Assistant (RAG)",
+    page_title="VLSI Assistant (Smart RAG)",
     page_icon="⚡",
     layout="wide"
 )
@@ -22,7 +22,8 @@ Instructions:
 - Give clear explanations
 - Provide SystemVerilog examples
 - Mention common bugs/pitfalls
-- Be practical, not theoretical
+- Be practical and relevant
+- If no context is provided, answer normally
 """
 
 # ================= LOAD KNOWLEDGE =================
@@ -47,16 +48,24 @@ def load_embeddings(chunks):
 chunks = load_data()
 embed_model, embeddings = load_embeddings(chunks)
 
-# ================= RETRIEVAL =================
-def retrieve(query, k=3):
+# ================= SMART RETRIEVAL =================
+def retrieve(query, k=3, threshold=0.35):
     if len(chunks) == 0:
         return ""
 
     query_vec = embed_model.encode([query])[0]
 
-    scores = np.dot(embeddings, query_vec)
+    # Cosine similarity
+    norms = np.linalg.norm(embeddings, axis=1)
+    query_norm = np.linalg.norm(query_vec)
+
+    scores = np.dot(embeddings, query_vec) / (norms * query_norm + 1e-8)
 
     top_indices = np.argsort(scores)[-k:][::-1]
+
+    # If best match is weak → ignore context
+    if scores[top_indices[0]] < threshold:
+        return ""
 
     results = [chunks[i] for i in top_indices]
 
@@ -99,7 +108,7 @@ with st.sidebar:
             st.session_state.messages = [{"role": "user", "content": question}]
 
 # ================= MAIN =================
-st.title("⚡ VLSI Engineering Assistant (RAG Enabled)")
+st.title("⚡ VLSI Engineering Assistant (Smart RAG)")
 
 if not api_key:
     st.warning("Enter Groq API key to continue")
@@ -127,8 +136,20 @@ if user_input and user_input.strip():
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # ================= RAG CONTEXT =================
+    # ================= SMART RAG =================
     context = retrieve(user_input)
+
+    if context:
+        final_prompt = f"""
+Use this VLSI context:
+
+{context}
+
+Question:
+{user_input}
+"""
+    else:
+        final_prompt = user_input
 
     # ================= CLIENT =================
     client = OpenAI(
@@ -160,17 +181,7 @@ if user_input and user_input.strip():
                 model=model_choice,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"""
-Use this VLSI context if relevant:
-
-{context}
-
-Question:
-{user_input}
-"""
-                    }
+                    {"role": "user", "content": final_prompt}
                 ],
                 max_tokens=1024
             )
