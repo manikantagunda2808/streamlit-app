@@ -1,19 +1,28 @@
 import streamlit as st
 from openai import OpenAI
-import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-# ================= CONFIG =================
-st.set_page_config(page_title="VLSI FAISS Assistant", page_icon="⚡")
+# ================= PAGE CONFIG =================
+st.set_page_config(
+    page_title="VLSI Assistant (RAG)",
+    page_icon="⚡",
+    layout="wide"
+)
 
+# ================= SYSTEM PROMPT =================
 SYSTEM_PROMPT = """You are a Senior VLSI Verification Engineer.
 
-Use provided context carefully.
-Give:
-- Clear explanation
-- SystemVerilog examples
-- Practical debugging insights
+Expert in:
+- SystemVerilog, UVM
+- AXI, PCIe
+- Debugging and interview preparation
+
+Instructions:
+- Give clear explanations
+- Provide SystemVerilog examples
+- Mention common bugs/pitfalls
+- Be practical, not theoretical
 """
 
 # ================= LOAD KNOWLEDGE =================
@@ -28,31 +37,28 @@ def load_data():
     chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
     return chunks
 
-# ================= EMBEDDING + INDEX =================
+# ================= EMBEDDINGS =================
 @st.cache_resource
-def create_index(chunks):
+def load_embeddings(chunks):
     model = SentenceTransformer("all-MiniLM-L6-v2")
-
     embeddings = model.encode(chunks)
-    dimension = embeddings.shape[1]
-
-    index = faiss.IndexFlatL2(dimension)
-    index.add(np.array(embeddings))
-
-    return model, index
+    return model, np.array(embeddings)
 
 chunks = load_data()
-embed_model, faiss_index = create_index(chunks)
+embed_model, embeddings = load_embeddings(chunks)
 
-# ================= SEARCH =================
+# ================= RETRIEVAL =================
 def retrieve(query, k=3):
-    query_vec = embed_model.encode([query])
-    D, I = faiss_index.search(np.array(query_vec), k)
+    if len(chunks) == 0:
+        return ""
 
-    results = []
-    for idx in I[0]:
-        if idx < len(chunks):
-            results.append(chunks[idx])
+    query_vec = embed_model.encode([query])[0]
+
+    scores = np.dot(embeddings, query_vec)
+
+    top_indices = np.argsort(scores)[-k:][::-1]
+
+    results = [chunks[i] for i in top_indices]
 
     return "\n\n".join(results)
 
@@ -62,32 +68,53 @@ if "messages" not in st.session_state:
 
 # ================= SIDEBAR =================
 with st.sidebar:
-    st.title("⚡ VLSI FAISS Assistant")
+    st.title("⚡ VLSI Assistant")
 
     api_key = st.text_input("Enter Groq API Key", type="password")
 
+    st.markdown("### ⚙️ Model Settings")
     model_choice = st.selectbox(
-        "Model",
+        "Select Model",
         [
             "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
             "llama-3.1-8b-instant"
-        ]
+        ],
+        index=0
     )
 
+    st.markdown("---")
+    st.markdown("### 📚 Quick Topics")
+
+    topics = {
+        "SystemVerilog": "Explain blocking vs non-blocking assignments",
+        "UVM": "Explain UVM phases",
+        "AXI": "Explain AXI handshake",
+        "PCIe": "Explain PCIe TLP flow",
+        "Interview": "Ask me VLSI interview questions"
+    }
+
+    for topic, question in topics.items():
+        if st.button(topic):
+            st.session_state.messages = [{"role": "user", "content": question}]
+
 # ================= MAIN =================
-st.title("⚡ VLSI Assistant (FAISS RAG)")
+st.title("⚡ VLSI Engineering Assistant (RAG Enabled)")
 
 if not api_key:
-    st.warning("Enter API key")
+    st.warning("Enter Groq API key to continue")
     st.stop()
 
-# ================= DISPLAY =================
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+st.caption(f"Using model: {model_choice}")
 
-# ================= INPUT =================
-user_input = st.chat_input("Ask VLSI question...")
+# ================= DISPLAY CHAT =================
+for msg in st.session_state.messages:
+    if msg["role"] in ["user", "assistant"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+# ================= USER INPUT =================
+user_input = st.chat_input("Ask your VLSI question...")
 
 if user_input and user_input.strip():
     user_input = user_input.strip()
@@ -100,17 +127,34 @@ if user_input and user_input.strip():
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # ===== FAISS RETRIEVAL =====
+    # ================= RAG CONTEXT =================
     context = retrieve(user_input)
 
-    # ===== CLIENT =====
+    # ================= CLIENT =================
     client = OpenAI(
         api_key=api_key,
         base_url="https://api.groq.com/openai/v1"
     )
 
+    # ================= CLEAN HISTORY =================
+    clean_messages = []
+    for msg in st.session_state.messages:
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") in ["user", "assistant"]
+            and isinstance(msg.get("content"), str)
+            and msg["content"].strip() != ""
+        ):
+            clean_messages.append({
+                "role": msg["role"],
+                "content": msg["content"].strip()
+            })
+
+    clean_messages = clean_messages[-8:]
+
+    # ================= API CALL =================
     try:
-        with st.spinner("Thinking..."):
+        with st.spinner("Thinking... 🤔"):
 
             response = client.chat.completions.create(
                 model=model_choice,
@@ -119,7 +163,7 @@ if user_input and user_input.strip():
                     {
                         "role": "user",
                         "content": f"""
-Use this context:
+Use this VLSI context if relevant:
 
 {context}
 
@@ -142,4 +186,4 @@ Question:
                 st.markdown(reply)
 
     except Exception as e:
-        st.error(str(e))
+        st.error(f"Error: {str(e)}")
