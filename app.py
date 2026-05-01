@@ -2,41 +2,40 @@ import streamlit as st
 from openai import OpenAI
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import sqlite3
 import json
-import os
 
 # ================= CONFIG =================
-st.set_page_config(page_title="VLSI AI", page_icon="⚡", layout="wide")
-
-CHAT_FILE = "chat_history.json"
+st.set_page_config(page_title="VLSI AI DB", page_icon="⚡")
 
 SYSTEM_PROMPT = """You are a Senior VLSI Verification Engineer.
-
-- Understand multi-turn conversations
-- Answer follow-up questions correctly
-- Use RAG only when relevant
-
-Give:
-- Clear explanations
-- SystemVerilog examples
-- Practical debugging tips
+Understand conversations and answer with practical insights.
 """
 
-# ================= LOAD CHAT =================
-def load_chat():
-    try:
-        with open(CHAT_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
+# ================= DATABASE =================
+conn = sqlite3.connect("chat.db", check_same_thread=False)
+cursor = conn.cursor()
 
-def save_chat(messages):
-    with open(CHAT_FILE, "w") as f:
-        json.dump(messages, f)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS chats (
+    user TEXT,
+    messages TEXT
+)
+""")
+conn.commit()
 
-# ================= SESSION =================
-if "messages" not in st.session_state:
-    st.session_state.messages = load_chat()
+def load_chat(user):
+    cursor.execute("SELECT messages FROM chats WHERE user=?", (user,))
+    row = cursor.fetchone()
+    if row:
+        return json.loads(row[0])
+    return []
+
+def save_chat(user, messages):
+    data = json.dumps(messages)
+    cursor.execute("DELETE FROM chats WHERE user=?", (user,))
+    cursor.execute("INSERT INTO chats VALUES (?, ?)", (user, data))
+    conn.commit()
 
 # ================= LOAD KNOWLEDGE =================
 @st.cache_resource
@@ -81,13 +80,20 @@ def is_follow_up(query):
     keywords = ["this", "that", "it", "how", "why", "where"]
     return any(word in query.lower() for word in keywords)
 
+# ================= USER LOGIN =================
+user = st.sidebar.text_input("Enter your name")
+
+if not user:
+    st.warning("Enter your name to continue")
+    st.stop()
+
+# ================= LOAD SESSION =================
+if "messages" not in st.session_state:
+    st.session_state.messages = load_chat(user)
+
 # ================= SIDEBAR =================
 with st.sidebar:
-    st.title("⚡ VLSI AI Assistant")
-
-    # API key from secrets
     api_key = st.secrets.get("GROQ_API_KEY", None)
-
     if not api_key:
         api_key = st.text_input("Enter Groq API Key", type="password")
 
@@ -102,16 +108,13 @@ with st.sidebar:
 
     if st.button("🗑 Clear Chat"):
         st.session_state.messages = []
-        save_chat([])
+        save_chat(user, [])
 
 # ================= MAIN =================
-st.title("⚡ VLSI Conversational AI")
+st.title(f"⚡ VLSI AI - {user}")
 
 if not api_key:
-    st.warning("Enter API key to continue")
     st.stop()
-
-st.caption(f"Using model: {model_choice}")
 
 # ================= DISPLAY =================
 for msg in st.session_state.messages:
@@ -121,33 +124,25 @@ for msg in st.session_state.messages:
 # ================= INPUT =================
 user_input = st.chat_input("Ask your VLSI question...")
 
-if user_input and user_input.strip():
-    user_input = user_input.strip()
-
+if user_input:
     st.session_state.messages.append({
         "role": "user",
         "content": user_input
     })
-    save_chat(st.session_state.messages)
+
+    save_chat(user, st.session_state.messages)
 
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # RAG decision
+    # RAG logic
     if is_follow_up(user_input):
         context = ""
     else:
         context = retrieve(user_input)
 
     if context:
-        final_prompt = f"""
-Use this VLSI context:
-
-{context}
-
-Question:
-{user_input}
-"""
+        final_prompt = f"Context:\n{context}\n\nQuestion:\n{user_input}"
     else:
         final_prompt = user_input
 
@@ -156,12 +151,7 @@ Question:
         base_url="https://api.groq.com/openai/v1"
     )
 
-    # Clean history
-    clean_messages = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages
-        if m["role"] in ["user", "assistant"]
-    ][-8:]
+    clean_messages = st.session_state.messages[-8:]
 
     messages_for_model = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -170,7 +160,8 @@ Question:
     ]
 
     try:
-        with st.spinner("Thinking... 🤔"):
+        with st.spinner("Thinking..."):
+
             response = client.chat.completions.create(
                 model=model_choice,
                 messages=messages_for_model,
@@ -183,7 +174,8 @@ Question:
                 "role": "assistant",
                 "content": reply
             })
-            save_chat(st.session_state.messages)
+
+            save_chat(user, st.session_state.messages)
 
             with st.chat_message("assistant"):
                 st.markdown(reply)
