@@ -69,14 +69,14 @@ user_id = st.session_state.user.id
 
 # ================= DATABASE =================
 def load_chat():
-    res = supabase.table("chats").select("*").eq("user", user_id).execute()
+    res = supabase.table("Chats").select("*").eq("user", user_id).execute()
     if res.data:
         return res.data[0]["messages"]
     return []
 
 def save_chat(messages):
     data = {"user": user_id, "messages": messages}
-    supabase.table("chats").upsert(data).execute()
+    supabase.table("Chats").upsert(data).execute()
 
 # ================= LOAD KNOWLEDGE =================
 @st.cache_resource
