@@ -59,12 +59,13 @@ vectorizer, vectors = build_vector_db(knowledge_chunks)
 
 # ================= RAG =================
 def retrieve(query, k=3):
-    query_vec = vectorizer.transform([query])
-    scores = cosine_similarity(query_vec, vectors)[0]
+    results = []
 
-    top_idx = np.argsort(scores)[-k:][::-1]
+    for chunk in knowledge_chunks:
+        if query.lower() in chunk.lower():
+            results.append(chunk)
 
-    return "\n\n".join([knowledge_chunks[i] for i in top_idx])
+    return "\n\n".join(results[:k])
 
 
 # ================= AUTH =================
