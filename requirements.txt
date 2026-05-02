@@ -1,5 +1,25 @@
-streamlit
-openai
-sentence-transformers
-numpy
-supabase
+# ============================================================================
+# VAALUKA VLSI AI - Python Dependencies (UPDATED)
+# ============================================================================
+# Install with: pip install -r requirements.txt
+
+# Web Framework - Streamlit for building the chat UI
+streamlit==1.40.1
+
+# Groq API Client - OpenAI-compatible client for Groq API
+openai==1.65.0
+
+# Embeddings - Sentence Transformers for semantic search
+sentence-transformers==3.0.1
+
+# Database - Supabase Python client for authentication and database
+supabase==2.7.2
+
+# Environment Variables - Load .env files for API keys
+python-dotenv==1.0.1
+
+# Machine Learning - scikit-learn for cosine similarity calculations
+scikit-learn==1.5.2
+
+# Numerical Computing - NumPy for vector operations
+numpy==1.24.0
