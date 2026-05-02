@@ -15,8 +15,5 @@ supabase==2.7.2
 # Environment Variables - Load .env files for API keys
 python-dotenv==1.0.1
 
-# Machine Learning - scikit-learn for cosine similarity calculations
-scikit-learn==1.3.2
-
 # Numerical Computing - NumPy for vector operations
 numpy==1.26.4
