@@ -1,189 +1,324 @@
+# ============================================================================
+# VAALUKA ENGINEERING ASSISTANT - Streamlit App
+# A VLSI Verification Training Assistant powered by Claude AI
+# ============================================================================
+
+# Import required libraries
 import streamlit as st
-from openai import OpenAI
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from supabase import create_client
+import anthropic
 
-# ================= CONFIG =================
-st.set_page_config(page_title="VLSI AI", page_icon="⚡")
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+# Configure the Streamlit page settings and appearance
+st.set_page_config(
+    page_title="Vaaluka Engineering Assistant",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+# Add custom CSS for better styling
+st.markdown("""
+    <style>
+    /* Make the app look more professional */
+    .main-title {
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 10px;
+    }
+    
+    .topic-button {
+        width: 100%;
+        margin: 8px 0;
+    }
+    
+    .footer {
+        text-align: center;
+        margin-top: 40px;
+        padding: 20px;
+        border-top: 1px solid #ddd;
+        color: #666;
+        font-size: 14px;
+    }
+    
+    .message-user {
+        background-color: #e3f2fd;
+        padding: 12px;
+        border-radius: 8px;
+        margin: 8px 0;
+    }
+    
+    .message-assistant {
+        background-color: #f5f5f5;
+        padding: 12px;
+        border-radius: 8px;
+        margin: 8px 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ============================================================================
+# SYSTEM PROMPT DEFINITION
+# ============================================================================
+# This prompt defines how the Claude AI assistant behaves
+SYSTEM_PROMPT = """You are a Senior VLSI Verification Engineer at Vaaluka Solutions with 10+ years of industry experience.
 
-SYSTEM_PROMPT = "You are a senior VLSI verification engineer."
+You specialize in:
+- SystemVerilog (SV) for verification and testbench development
+- Universal Verification Methodology (UVM) frameworks and best practices
+- AXI Protocol verification and implementation
+- PCIe Protocol verification and debugging
+- Interview preparation for VLSI engineers
 
-# ================= AUTH =================
-if "user" not in st.session_state:
-    st.session_state.user = None
+Your communication style:
+- Practical and direct, focusing on real-world solutions
+- Always provide code examples when relevant and helpful
+- Explain complex concepts in simple terms
+- Reference industry best practices and design patterns
+- Be concise but thorough in your explanations
+- If asked about topics outside your expertise, politely redirect to your specialties
 
-def login(email, password):
-    res = supabase.auth.sign_in_with_password({
-        "email": email,
-        "password": password
-    })
-    return res
+When answering:
+1. Start with a clear explanation of the concept
+2. Provide relevant code examples in appropriate languages (SystemVerilog, Python, etc.)
+3. Highlight common pitfalls and how to avoid them
+4. Suggest practical approaches based on industry experience
+5. Ask clarifying questions if the question is ambiguous"""
 
-def signup(email, password):
-    res = supabase.auth.sign_up({
-        "email": email,
-        "password": password
-    })
-    return res
+# ============================================================================
+# TOPIC DEFINITIONS
+# ============================================================================
+# Define all available topics and their starter questions
+TOPICS = {
+    "SystemVerilog": {
+        "starter": "What are the key differences between blocking and non-blocking assignments in SystemVerilog, and when should I use each one?",
+        "icon": "🔧"
+    },
+    "UVM": {
+        "starter": "Can you explain the UVM testbench hierarchy and how sequences, drivers, and monitors work together?",
+        "icon": "🏗️"
+    },
+    "AXI Protocol": {
+        "starter": "What are the main channels in the AXI protocol and how does the handshake mechanism work?",
+        "icon": "🔌"
+    },
+    "PCIe Protocol": {
+        "starter": "Can you explain the PCIe transaction layer and how it handles request/completion cycles?",
+        "icon": "💾"
+    },
+    "Interview Prep": {
+        "starter": "What would you expect a good answer to be for this question: 'Describe a complex verification challenge you solved and how you approached it'?",
+        "icon": "🎯"
+    }
+}
 
-# ================= LOGIN UI =================
-if not st.session_state.user:
-    st.title("🔐 Login / Signup")
-
-    tab1, tab2 = st.tabs(["Login", "Signup"])
-
-    with tab1:
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-
-        if st.button("Login"):
-            try:
-                res = login(email, password)
-                st.session_state.user = res.user
-                st.rerun()
-            except Exception as e:
-                st.error("Login failed")
-
-    with tab2:
-        email = st.text_input("New Email")
-        password = st.text_input("New Password", type="password")
-
-        if st.button("Signup"):
-            try:
-                signup(email, password)
-                st.success("Signup successful. Now login.")
-            except:
-                st.error("Signup failed")
-
-    st.stop()
-
-# ================= USER INFO =================
-user_id = st.session_state.user.id
-
-# ================= DATABASE =================
-def load_chat():
-    res = supabase.table("Chats").select("*").eq("user", user_id).execute()
-    if res.data:
-        return res.data[0]["messages"]
-    return []
-
-def save_chat(messages):
-    data = {"user": user_id, "messages": messages}
-    supabase.table("Chats").upsert(data).execute()
-
-# ================= LOAD KNOWLEDGE =================
-@st.cache_resource
-def load_data():
-    try:
-        with open("vlsi_knowledge.txt", "r") as f:
-            text = f.read()
-    except:
-        text = ""
-    return [c.strip() for c in text.split("\n\n") if c.strip()]
-
-@st.cache_resource
-def load_embeddings(chunks):
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode(chunks)
-    return model, np.array(embeddings)
-
-chunks = load_data()
-embed_model, embeddings = load_embeddings(chunks)
-
-# ================= RAG =================
-def retrieve(query, k=3, threshold=0.35):
-    if len(chunks) == 0:
-        return ""
-
-    query_vec = embed_model.encode([query])[0]
-
-    norms = np.linalg.norm(embeddings, axis=1)
-    query_norm = np.linalg.norm(query_vec)
-
-    scores = np.dot(embeddings, query_vec) / (norms * query_norm + 1e-8)
-
-    top_indices = np.argsort(scores)[-k:][::-1]
-
-    if scores[top_indices[0]] < threshold:
-        return ""
-
-    return "\n\n".join([chunks[i] for i in top_indices])
-
-# ================= SESSION =================
+# ============================================================================
+# SESSION STATE INITIALIZATION
+# ============================================================================
+# Initialize Streamlit session state variables (these persist across app interactions)
 if "messages" not in st.session_state:
-    st.session_state.messages = load_chat()
+    # Initialize empty conversation history
+    st.session_state.messages = []
 
-# ================= SIDEBAR =================
+if "current_topic" not in st.session_state:
+    # Track which topic is currently selected
+    st.session_state.current_topic = None
+
+if "api_key_valid" not in st.session_state:
+    # Track whether the API key has been validated
+    st.session_state.api_key_valid = False
+
+# ============================================================================
+# SIDEBAR SETUP
+# ============================================================================
 with st.sidebar:
-    st.write(f"👤 {st.session_state.user.email}")
-
-    model_choice = st.selectbox(
-        "Model",
-        [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-70b-versatile",
-            "llama-3.1-8b-instant"
-        ]
+    # Display company branding
+    st.markdown("## 🏢 Vaaluka Solutions")
+    st.markdown("---")
+    
+    # Display API Key input section
+    st.markdown("### 🔑 API Configuration")
+    api_key = st.text_input(
+        "Enter your Anthropic API Key",
+        type="password",
+        help="Your API key is used only in this session and not stored"
     )
+    
+    # Validate and store API key
+    if api_key:
+        st.session_state.api_key_valid = True
+        api_key_to_use = api_key
+    else:
+        st.session_state.api_key_valid = False
+        api_key_to_use = None
+    
+    st.markdown("---")
+    
+    # Display topic selection section
+    st.markdown("### 📚 Learning Topics")
+    
+    # Create a button for each topic
+    for topic_name, topic_info in TOPICS.items():
+        # Use columns to align buttons properly
+        col1, col2 = st.columns([1, 4])
+        
+        with col1:
+            st.write(topic_info["icon"])
+        
+        with col2:
+            # When a topic button is clicked:
+            # 1. Set the current topic
+            # 2. Clear conversation history (start fresh)
+            # 3. Add the starter question to the conversation
+            if st.button(
+                topic_name,
+                key=f"btn_{topic_name}",
+                use_container_width=True,
+                help=f"Learn about {topic_name}"
+            ):
+                st.session_state.current_topic = topic_name
+                st.session_state.messages = []  # Clear chat history
+                # Add the starter question to the conversation
+                st.session_state.messages.append({
+                    "role": "user",
+                    "content": topic_info["starter"]
+                })
+                st.rerun()  # Refresh the app to show the new question
+    
+    st.markdown("---")
+    
+    # Display helpful information
+    st.markdown("### 💡 Tips")
+    st.markdown("""
+    - Click a topic to get started
+    - The assistant will load a starter question
+    - Ask follow-up questions to dive deeper
+    - Code examples are provided when relevant
+    """)
+    
+    st.markdown("---")
+    
+    # Display footer information
+    st.markdown("### About")
+    st.markdown("""
+    **Vaaluka Engineering Assistant** v1.0
+    
+    Powered by Anthropic Claude
+    """)
 
-    if st.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
+# ============================================================================
+# MAIN CHAT INTERFACE
+# ============================================================================
 
-    if st.button("🗑 Clear Chat"):
-        st.session_state.messages = []
-        save_chat([])
+# Display the main title
+st.markdown('<h1 class="main-title">⚡ Vaaluka Engineering Assistant</h1>', unsafe_allow_html=True)
 
-# ================= MAIN =================
-st.title("⚡ VLSI AI (Authenticated)")
+# Display current topic
+if st.session_state.current_topic:
+    st.info(f"📚 Currently discussing: **{st.session_state.current_topic}**")
+else:
+    st.info("👈 Select a topic from the sidebar to get started!")
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# ================= INPUT =================
-user_input = st.chat_input("Ask your question...")
-
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    save_chat(st.session_state.messages)
-
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    context = retrieve(user_input)
-
-    final_prompt = f"{context}\n\nQuestion:\n{user_input}" if context else user_input
-
-    client = OpenAI(
-        api_key=GROQ_API_KEY,
-        base_url="https://api.groq.com/openai/v1"
+# Check if API key is provided
+if not st.session_state.api_key_valid:
+    st.warning("⚠️ Please enter your Anthropic API Key in the sidebar to begin.")
+    st.markdown("""
+    Don't have an API key? 
+    1. Go to https://console.anthropic.com
+    2. Sign up or log in
+    3. Create a new API key
+    4. Paste it in the sidebar
+    """)
+else:
+    # ========================================================================
+    # DISPLAY CONVERSATION HISTORY
+    # ========================================================================
+    # Show all previous messages in the conversation
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            # Display user messages in a blue box
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(message["content"])
+        else:
+            # Display assistant messages in a gray box
+            with st.chat_message("assistant", avatar="⚡"):
+                st.markdown(message["content"])
+    
+    # ========================================================================
+    # CHAT INPUT SECTION
+    # ========================================================================
+    # Get user input from the chat interface
+    user_input = st.chat_input(
+        "Ask your VLSI verification question...",
+        disabled=not st.session_state.api_key_valid
     )
+    
+    # Process user input when provided
+    if user_input:
+        # Add user message to conversation history
+        st.session_state.messages.append({
+            "role": "user",
+            "content": user_input
+        })
+        
+        # Display the user's message immediately
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(user_input)
+        
+        # ====================================================================
+        # CALL CLAUDE API
+        # ====================================================================
+        # Initialize the Anthropic client with the provided API key
+        client = anthropic.Anthropic(api_key=api_key_to_use)
+        
+        # Show a loading spinner while waiting for the response
+        with st.spinner("Thinking... 🤔"):
+            try:
+                # Make the API call to Claude
+                response = client.messages.create(
+                    # Use Haiku model for cost efficiency (as requested)
+                    model="claude-haiku-4-5-20251001",
+                    # Set maximum tokens for the response (adjust if needed)
+                    max_tokens=1024,
+                    # Use the system prompt to define assistant behavior
+                    system=SYSTEM_PROMPT,
+                    # Pass the entire conversation history so Claude understands context
+                    messages=st.session_state.messages
+                )
+                
+                # Extract the assistant's response text
+                assistant_message = response.content[0].text
+                
+                # Add the assistant's response to conversation history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": assistant_message
+                })
+                
+                # Display the assistant's response
+                with st.chat_message("assistant", avatar="⚡"):
+                    st.markdown(assistant_message)
+                
+            except anthropic.APIError as e:
+                # Handle API errors gracefully
+                st.error(f"❌ API Error: {str(e)}")
+                st.markdown("""
+                **Troubleshooting:**
+                - Check that your API key is correct
+                - Verify you have sufficient API credits
+                - Ensure your internet connection is working
+                """)
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        *st.session_state.messages[-8:],
-        {"role": "user", "content": final_prompt}
-    ]
-
-    with st.spinner("Thinking..."):
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=messages,
-            max_tokens=1024
-        )
-
-        reply = response.choices[0].message.content
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        save_chat(st.session_state.messages)
-
-        with st.chat_message("assistant"):
-            st.markdown(reply)
+# ============================================================================
+# FOOTER
+# ============================================================================
+# Display footer at the bottom of the page
+st.markdown("---")
+st.markdown("""
+<div class="footer">
+    <p><strong>Powered by Vaaluka Solutions</strong></p>
+    <p>Senior VLSI Verification Engineering Training Assistant</p>
+    <p style="font-size: 12px; margin-top: 10px;">© 2024 Vaaluka Solutions. All rights reserved.</p>
+</div>
+""", unsafe_allow_html=True)
